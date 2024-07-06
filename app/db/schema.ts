@@ -6,9 +6,8 @@ import {
 	integer,
 	sqliteTable,
 	text,
+	blob,
 } from 'drizzle-orm/sqlite-core'
-
-const SESSION_EXPIRATION_TIME = 1000 * 60 * 60 * 24 * 30
 
 const timestamp = <TName extends string>(name: TName) =>
 	integer(name, { mode: 'timestamp' })
@@ -62,7 +61,7 @@ export const noteImages = sqliteTable(
 			.$defaultFn(() => createId()),
 		altText: text('alt_text'),
 		contentType: text('content_type').notNull(),
-		blob: integer('blob', { mode: 'number' }).notNull(),
+		blob: blob('blob', { mode: 'buffer' }).notNull(),
 
 		createdAt: timestamp('created_at'),
 		updatedAt: timestamp('updated_at'),
@@ -83,7 +82,7 @@ export const userImages = sqliteTable('user_image', {
 		.$defaultFn(() => createId()),
 	altText: text('alt_text'),
 	contentType: text('content_type').notNull(),
-	blob: integer('blob', { mode: 'number' }).notNull(),
+	blob: blob('blob', { mode: 'buffer' }).notNull(),
 
 	createdAt: timestamp('created_at'),
 	updatedAt: timestamp('updated_at'),
@@ -107,9 +106,7 @@ export const sessions = sqliteTable(
 		id: text('id')
 			.primaryKey()
 			.$defaultFn(() => createId()),
-		expirationDate: integer('expiration_date', { mode: 'timestamp' })
-			.notNull()
-			.$defaultFn(() => new Date(Date.now() + SESSION_EXPIRATION_TIME)),
+		expirationDate: integer('expiration_date', { mode: 'timestamp' }).notNull(),
 
 		createdAt: timestamp('created_at'),
 		updatedAt: timestamp('updated_at'),
@@ -295,3 +292,13 @@ export const rolesToUsersRelations = relations(rolesToUsers, ({ one }) => ({
 	role: one(roles),
 	user: one(users),
 }))
+
+export type Connection = typeof connections.$inferSelect
+
+export type Password = typeof passwords.$inferSelect
+
+export type User = typeof users.$inferSelect
+
+export type Note = typeof notes.$inferSelect
+
+export type NoteImage = typeof noteImages.$inferSelect

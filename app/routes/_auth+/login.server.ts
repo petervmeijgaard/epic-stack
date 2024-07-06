@@ -1,9 +1,11 @@
 import { invariant } from '@epic-web/invariant'
 import { redirect } from '@remix-run/node'
+import { and, eq } from 'drizzle-orm'
 import { safeRedirect } from 'remix-utils/safe-redirect'
+import { db } from '#app/db'
+import { sessions, verifications } from '#app/db/schema.ts'
 import { twoFAVerificationType } from '#app/routes/settings+/profile.two-factor.tsx'
 import { getUserId, sessionKey } from '#app/utils/auth.server.ts'
-import { prisma } from '#app/utils/db.server.ts'
 import { combineResponseInits } from '#app/utils/misc.tsx'
 import { authSessionStorage } from '#app/utils/session.server.ts'
 import { redirectWithToast } from '#app/utils/toast.server.ts'
@@ -28,12 +30,14 @@ export async function handleNewSession(
 	},
 	responseInit?: ResponseInit,
 ) {
-	const verification = await prisma.verification.findUnique({
-		select: { id: true },
-		where: {
-			target_type: { target: session.userId, type: twoFAVerificationType },
-		},
+	const verification = await db.query.verifications.findFirst({
+		columns: { id: true },
+		where: and(
+			eq(verifications.target, session.userId),
+			eq(verifications.type, twoFAVerificationType),
+		),
 	})
+
 	const userHasTwoFactor = Boolean(verification)
 
 	if (userHasTwoFactor) {
@@ -102,9 +106,9 @@ export async function handleVerification({
 
 	const unverifiedSessionId = verifySession.get(unverifiedSessionIdKey)
 	if (unverifiedSessionId) {
-		const session = await prisma.session.findUnique({
-			select: { expirationDate: true },
-			where: { id: unverifiedSessionId },
+		const session = await db.query.sessions.findFirst({
+			columns: { expirationDate: true },
+			where: eq(sessions.id, unverifiedSessionId),
 		})
 		if (!session) {
 			throw await redirectWithToast('/login', {
@@ -147,9 +151,12 @@ export async function shouldRequestTwoFA(request: Request) {
 	const userId = await getUserId(request)
 	if (!userId) return false
 	// if it's over two hours since they last verified, we should request 2FA again
-	const userHasTwoFA = await prisma.verification.findUnique({
-		select: { id: true },
-		where: { target_type: { target: userId, type: twoFAVerificationType } },
+	const userHasTwoFA = await db.query.verifications.findFirst({
+		columns: { id: true },
+		where: and(
+			eq(verifications.target, userId),
+			eq(verifications.type, twoFAVerificationType),
+		),
 	})
 	if (!userHasTwoFA) return false
 	const verifiedTime = authSession.get(verifiedTimeKey) ?? new Date(0)

@@ -1,28 +1,28 @@
-import { invariantResponse } from '@epic-web/invariant'
+import { invariant, invariantResponse } from '@epic-web/invariant'
 import { json, type LoaderFunctionArgs } from '@remix-run/node'
 import { Form, Link, useLoaderData, type MetaFunction } from '@remix-run/react'
+import { eq } from 'drizzle-orm'
 import { GeneralErrorBoundary } from '#app/components/error-boundary.tsx'
 import { Spacer } from '#app/components/spacer.tsx'
 import { Button } from '#app/components/ui/button.tsx'
 import { Icon } from '#app/components/ui/icon.tsx'
-import { prisma } from '#app/utils/db.server.ts'
+import { db } from '#app/db'
+import { users } from '#app/db/schema.ts'
 import { getUserImgSrc } from '#app/utils/misc.tsx'
 import { useOptionalUser } from '#app/utils/user.ts'
 
 export async function loader({ params }: LoaderFunctionArgs) {
-	const user = await prisma.user.findFirst({
-		select: {
+	invariant(params.username, 'No username provided')
+	const user = await db.query.users.findFirst({
+		columns: {
 			id: true,
 			name: true,
 			username: true,
 			createdAt: true,
-			image: { select: { id: true } },
 		},
-		where: {
-			username: params.username,
-		},
+		with: { image: { columns: { id: true } } },
+		where: eq(users.username, params.username),
 	})
-
 	invariantResponse(user, 'User not found', { status: 404 })
 
 	return json({ user, userJoinedDisplay: user.createdAt.toLocaleDateString() })

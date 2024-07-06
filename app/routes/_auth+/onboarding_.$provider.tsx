@@ -19,11 +19,14 @@ import {
 	useLoaderData,
 	useSearchParams,
 } from '@remix-run/react'
+import { eq } from 'drizzle-orm'
 import { safeRedirect } from 'remix-utils/safe-redirect'
 import { z } from 'zod'
 import { CheckboxField, ErrorList, Field } from '#app/components/forms.tsx'
 import { Spacer } from '#app/components/spacer.tsx'
 import { StatusButton } from '#app/components/ui/status-button.tsx'
+import { db } from '#app/db'
+import { users } from '#app/db/schema.ts'
 import {
 	authenticator,
 	sessionKey,
@@ -32,7 +35,6 @@ import {
 } from '#app/utils/auth.server.ts'
 import { connectionSessionStorage } from '#app/utils/connections.server'
 import { ProviderNameSchema } from '#app/utils/connections.tsx'
-import { prisma } from '#app/utils/db.server.ts'
 import { useIsPending } from '#app/utils/misc.tsx'
 import { authSessionStorage } from '#app/utils/session.server.ts'
 import { redirectWithToast } from '#app/utils/toast.server.ts'
@@ -118,9 +120,9 @@ export async function action({ request, params }: ActionFunctionArgs) {
 
 	const submission = await parseWithZod(formData, {
 		schema: SignupFormSchema.superRefine(async (data, ctx) => {
-			const existingUser = await prisma.user.findUnique({
-				where: { username: data.username },
-				select: { id: true },
+			const existingUser = await db.query.users.findFirst({
+				columns: { id: true },
+				where: eq(users.username, data.username),
 			})
 			if (existingUser) {
 				ctx.addIssue({

@@ -1,5 +1,6 @@
 import { getFormProps, getInputProps, useForm } from '@conform-to/react'
 import { getZodConstraint, parseWithZod } from '@conform-to/zod'
+import { invariant } from '@epic-web/invariant'
 import { type SEOHandle } from '@nasa-gcn/remix-seo'
 import {
 	json,
@@ -13,14 +14,16 @@ import {
 	useLoaderData,
 	useNavigation,
 } from '@remix-run/react'
+import { and, eq } from 'drizzle-orm'
 import * as QRCode from 'qrcode'
 import { z } from 'zod'
 import { ErrorList, OTPField } from '#app/components/forms.tsx'
 import { Icon } from '#app/components/ui/icon.tsx'
 import { StatusButton } from '#app/components/ui/status-button.tsx'
+import { db } from '#app/db'
+import { users, verifications } from '#app/db/schema.ts'
 import { isCodeValid } from '#app/routes/_auth+/verify.server.ts'
 import { requireUserId } from '#app/utils/auth.server.ts'
-import { prisma } from '#app/utils/db.server.ts'
 import { getDomainUrl, useIsPending } from '#app/utils/misc.tsx'
 import { redirectWithToast } from '#app/utils/toast.server.ts'
 import { getTOTPAuthUri } from '#app/utils/totp.server.ts'
@@ -47,11 +50,12 @@ export const twoFAVerifyVerificationType = '2fa-verify'
 
 export async function loader({ request }: LoaderFunctionArgs) {
 	const userId = await requireUserId(request)
-	const verification = await prisma.verification.findUnique({
-		where: {
-			target_type: { type: twoFAVerifyVerificationType, target: userId },
-		},
-		select: {
+	const verification = await db.query.verifications.findFirst({
+		where: and(
+			eq(verifications.type, twoFAVerifyVerificationType),
+			eq(verifications.target, userId),
+		),
+		columns: {
 			id: true,
 			algorithm: true,
 			secret: true,
@@ -62,10 +66,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	if (!verification) {
 		return redirect('/settings/profile/two-factor')
 	}
-	const user = await prisma.user.findUniqueOrThrow({
-		where: { id: userId },
-		select: { email: true },
+	const user = await db.query.users.findFirst({
+		where: eq(users.id, userId),
+		columns: { email: true },
 	})
+	invariant(user, 'User not found')
 	const issuer = new URL(getDomainUrl(request)).host
 	const otpUri = getTOTPAuthUri({
 		...verification,
@@ -110,18 +115,26 @@ export async function action({ request }: ActionFunctionArgs) {
 
 	switch (submission.value.intent) {
 		case 'cancel': {
-			await prisma.verification.deleteMany({
-				where: { type: twoFAVerifyVerificationType, target: userId },
-			})
+			await db
+				.delete(verifications)
+				.where(
+					and(
+						eq(verifications.type, twoFAVerifyVerificationType),
+						eq(verifications.target, userId),
+					),
+				)
 			return redirect('/settings/profile/two-factor')
 		}
 		case 'verify': {
-			await prisma.verification.update({
-				where: {
-					target_type: { type: twoFAVerifyVerificationType, target: userId },
-				},
-				data: { type: twoFAVerificationType },
-			})
+			await db
+				.update(verifications)
+				.set({ type: twoFAVerificationType })
+				.where(
+					and(
+						eq(verifications.type, twoFAVerifyVerificationType),
+						eq(verifications.target, userId),
+					),
+				)
 			return redirectWithToast('/settings/profile/two-factor', {
 				type: 'success',
 				title: 'Enabled',

@@ -7,7 +7,10 @@ import {
 	redirect,
 	type ActionFunctionArgs,
 } from '@remix-run/node'
+import { and, eq } from 'drizzle-orm'
 import { z } from 'zod'
+import { db } from '#app/db'
+import { notes } from '#app/db/schema.ts'
 import { requireUserId } from '#app/utils/auth.server.ts'
 import { prisma } from '#app/utils/db.server.ts'
 import {
@@ -40,9 +43,9 @@ export async function action({ request }: ActionFunctionArgs) {
 		schema: NoteEditorSchema.superRefine(async (data, ctx) => {
 			if (!data.id) return
 
-			const note = await prisma.note.findUnique({
-				select: { id: true },
-				where: { id: data.id, ownerId: userId },
+			const note = await db.query.notes.findFirst({
+				columns: { id: true },
+				where: and(eq(notes.id, data.id), eq(notes.ownerId, userId)),
 			})
 			if (!note) {
 				ctx.addIssue({
@@ -102,6 +105,7 @@ export async function action({ request }: ActionFunctionArgs) {
 		newImages = [],
 	} = submission.value
 
+	// todo: use Drizzle upsert
 	const updatedNote = await prisma.note.upsert({
 		select: { id: true, owner: { select: { username: true } } },
 		where: { id: noteId ?? '__new_note__' },

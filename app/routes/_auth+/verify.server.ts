@@ -1,7 +1,10 @@
 import { type Submission } from '@conform-to/react'
 import { parseWithZod } from '@conform-to/zod'
 import { json } from '@remix-run/node'
+import { and, eq, gt, or, isNull } from 'drizzle-orm'
 import { z } from 'zod'
+import { db } from '#app/db'
+import { verifications } from '#app/db/schema.ts'
 import { handleVerification as handleChangeEmailVerification } from '#app/routes/settings+/profile.change-email.server.tsx'
 import { twoFAVerificationType } from '#app/routes/settings+/profile.two-factor.tsx'
 import { requireUserId } from '#app/utils/auth.server.ts'
@@ -99,6 +102,7 @@ export async function prepareVerification({
 		...verificationConfig,
 		expiresAt: new Date(Date.now() + verificationConfig.period * 1000),
 	}
+	// todo: figure out upserts in Drizzle
 	await prisma.verification.upsert({
 		where: { target_type: { target, type } },
 		create: verificationData,
@@ -120,12 +124,15 @@ export async function isCodeValid({
 	type: VerificationTypes | typeof twoFAVerifyVerificationType
 	target: string
 }) {
-	const verification = await prisma.verification.findUnique({
-		where: {
-			target_type: { target, type },
-			OR: [{ expiresAt: { gt: new Date() } }, { expiresAt: null }],
-		},
-		select: { algorithm: true, secret: true, period: true, charSet: true },
+	const verification = await db.query.verifications.findFirst({
+		columns: { algorithm: true, secret: true, period: true, charSet: true },
+		where: and(
+			and(eq(verifications.target, target), eq(verifications.type, type)),
+			or(
+				gt(verifications.expiresAt, new Date()),
+				isNull(verifications.expiresAt),
+			),
+		),
 	})
 	if (!verification) return false
 	const result = verifyTOTP({
@@ -170,14 +177,14 @@ export async function validateRequest(
 	const { value: submissionValue } = submission
 
 	async function deleteVerification() {
-		await prisma.verification.delete({
-			where: {
-				target_type: {
-					type: submissionValue[typeQueryParam],
-					target: submissionValue[targetQueryParam],
-				},
-			},
-		})
+		await db
+			.delete(verifications)
+			.where(
+				and(
+					eq(verifications.target, submissionValue[targetQueryParam]),
+					eq(verifications.type, submissionValue[typeQueryParam]),
+				),
+			)
 	}
 
 	switch (submissionValue[typeQueryParam]) {

@@ -1,11 +1,13 @@
 import { invariant } from '@epic-web/invariant'
 import * as E from '@react-email/components'
 import { json } from '@remix-run/node'
+import { eq } from 'drizzle-orm'
+import { db } from '#app/db'
+import { users } from '#app/db/schema.ts'
 import {
 	requireRecentVerification,
 	type VerifyFunctionArgs,
 } from '#app/routes/_auth+/verify.server.ts'
-import { prisma } from '#app/utils/db.server.ts'
 import { sendEmail } from '#app/utils/email.server.ts'
 import { redirectWithToast } from '#app/utils/toast.server.ts'
 import { verifySessionStorage } from '#app/utils/verification.server.ts'
@@ -37,15 +39,20 @@ export async function handleVerification({
 			{ status: 400 },
 		)
 	}
-	const preUpdateUser = await prisma.user.findFirstOrThrow({
-		select: { email: true },
-		where: { id: submission.value.target },
+	const preUpdateUser = await db.query.users.findFirst({
+		columns: { email: true },
+		where: eq(users.id, submission.value.target),
 	})
-	const user = await prisma.user.update({
-		where: { id: submission.value.target },
-		select: { id: true, email: true, username: true },
-		data: { email: newEmail },
-	})
+
+	invariant(preUpdateUser, 'User should exist')
+
+	const [user] = await db
+		.update(users)
+		.set({ email: newEmail })
+		.where(eq(users.id, submission.value.target))
+		.returning({ id: users.id, email: users.email, username: users.username })
+
+	invariant(user, 'User should exist')
 
 	void sendEmail({
 		to: preUpdateUser.email,

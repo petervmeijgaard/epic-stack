@@ -8,7 +8,6 @@ import {
 	type FieldMetadata,
 } from '@conform-to/react'
 import { getZodConstraint, parseWithZod } from '@conform-to/zod'
-import { type Note, type NoteImage } from '@prisma/client'
 import { type SerializeFrom } from '@remix-run/node'
 import { Form, useActionData } from '@remix-run/react'
 import { useState } from 'react'
@@ -21,6 +20,7 @@ import { Icon } from '#app/components/ui/icon.tsx'
 import { Label } from '#app/components/ui/label.tsx'
 import { StatusButton } from '#app/components/ui/status-button.tsx'
 import { Textarea } from '#app/components/ui/textarea.tsx'
+import { type Note, type NoteImage } from '#app/db/schema.ts'
 import { cn, getNoteImgSrc, useIsPending } from '#app/utils/misc.tsx'
 import { type action } from './__note-editor.server'
 

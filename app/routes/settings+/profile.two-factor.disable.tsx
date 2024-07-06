@@ -5,11 +5,13 @@ import {
 	type ActionFunctionArgs,
 } from '@remix-run/node'
 import { useFetcher } from '@remix-run/react'
+import { and, eq } from 'drizzle-orm'
 import { Icon } from '#app/components/ui/icon.tsx'
 import { StatusButton } from '#app/components/ui/status-button.tsx'
+import { db } from '#app/db'
+import { verifications } from '#app/db/schema.ts'
 import { requireRecentVerification } from '#app/routes/_auth+/verify.server.ts'
 import { requireUserId } from '#app/utils/auth.server.ts'
-import { prisma } from '#app/utils/db.server.ts'
 import { useDoubleCheck } from '#app/utils/misc.tsx'
 import { redirectWithToast } from '#app/utils/toast.server.ts'
 import { type BreadcrumbHandle } from './profile.tsx'
@@ -28,9 +30,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
 export async function action({ request }: ActionFunctionArgs) {
 	await requireRecentVerification(request)
 	const userId = await requireUserId(request)
-	await prisma.verification.delete({
-		where: { target_type: { target: userId, type: twoFAVerificationType } },
-	})
+	await db
+		.delete(verifications)
+		.where(
+			and(
+				eq(verifications.target, userId),
+				eq(verifications.type, twoFAVerificationType),
+			),
+		)
 	return redirectWithToast('/settings/profile/two-factor', {
 		title: '2FA Disabled',
 		description: 'Two factor authentication has been disabled.',

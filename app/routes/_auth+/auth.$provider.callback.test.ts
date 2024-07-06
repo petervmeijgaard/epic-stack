@@ -1,12 +1,14 @@
 import { invariant } from '@epic-web/invariant'
 import { faker } from '@faker-js/faker'
+import { and, eq } from 'drizzle-orm'
 import { http } from 'msw'
 import { afterEach, expect, test } from 'vitest'
+import { db } from '#app/db'
+import { connections, sessions, users, verifications } from '#app/db/schema.ts'
 import { twoFAVerificationType } from '#app/routes/settings+/profile.two-factor.tsx'
 import { getSessionExpirationDate, sessionKey } from '#app/utils/auth.server.ts'
 import { connectionSessionStorage } from '#app/utils/connections.server.ts'
 import { GITHUB_PROVIDER_NAME } from '#app/utils/connections.tsx'
-import { prisma } from '#app/utils/db.server.ts'
 import { authSessionStorage } from '#app/utils/session.server.ts'
 import { generateTOTP } from '#app/utils/totp.server.ts'
 import { createUser } from '#tests/db-utils.ts'
@@ -69,12 +71,12 @@ test('when a user is logged in, it creates the connection', async () => {
 			description: expect.stringContaining(githubUser.profile.login),
 		}),
 	)
-	const connection = await prisma.connection.findFirst({
-		select: { id: true },
-		where: {
-			userId: session.userId,
-			providerId: githubUser.profile.id.toString(),
-		},
+	const connection = await db.query.connections.findFirst({
+		columns: { id: true },
+		where: and(
+			eq(connections.userId, session.userId),
+			eq(connections.providerId, githubUser.profile.id.toString()),
+		),
 	})
 	expect(
 		connection,
@@ -85,12 +87,10 @@ test('when a user is logged in, it creates the connection', async () => {
 test(`when a user is logged in and has already connected, it doesn't do anything and just redirects the user back to the connections page`, async () => {
 	const session = await setupUser()
 	const githubUser = await insertGitHubUser()
-	await prisma.connection.create({
-		data: {
-			providerName: GITHUB_PROVIDER_NAME,
-			userId: session.userId,
-			providerId: githubUser.profile.id.toString(),
-		},
+	await db.insert(connections).values({
+		userId: session.userId,
+		providerName: GITHUB_PROVIDER_NAME,
+		providerId: githubUser.profile.id.toString(),
 	})
 	const request = await setupRequest({
 		sessionId: session.id,
@@ -122,12 +122,12 @@ test('when a user exists with the same email, create connection and make session
 		}),
 	)
 
-	const connection = await prisma.connection.findFirst({
-		select: { id: true },
-		where: {
-			userId: userId,
-			providerId: githubUser.profile.id.toString(),
-		},
+	const connection = await db.query.connections.findFirst({
+		columns: { id: true },
+		where: and(
+			eq(connections.userId, userId),
+			eq(connections.providerId, githubUser.profile.id.toString()),
+		),
 	})
 	expect(
 		connection,
@@ -139,17 +139,22 @@ test('when a user exists with the same email, create connection and make session
 
 test('gives an error if the account is already connected to another user', async () => {
 	const githubUser = await insertGitHubUser()
-	await prisma.user.create({
-		data: {
-			...createUser(),
-			connections: {
-				create: {
-					providerName: GITHUB_PROVIDER_NAME,
-					providerId: githubUser.profile.id.toString(),
-				},
-			},
-		},
+
+	await db.transaction(async (tx) => {
+		const [user] = await tx
+			.insert(users)
+			.values(createUser())
+			.returning({ id: users.id })
+
+		invariant(user, 'user should be defined')
+
+		await tx.insert(connections).values({
+			userId: user.id,
+			providerName: GITHUB_PROVIDER_NAME,
+			providerId: githubUser.profile.id.toString(),
+		})
 	})
+
 	const session = await setupUser()
 	const request = await setupRequest({
 		sessionId: session.id,
@@ -170,12 +175,10 @@ test('gives an error if the account is already connected to another user', async
 test('if a user is not logged in, but the connection exists, make a session', async () => {
 	const githubUser = await insertGitHubUser()
 	const { userId } = await setupUser()
-	await prisma.connection.create({
-		data: {
-			providerName: GITHUB_PROVIDER_NAME,
-			providerId: githubUser.profile.id.toString(),
-			userId,
-		},
+	await db.insert(connections).values({
+		providerName: GITHUB_PROVIDER_NAME,
+		providerId: githubUser.profile.id.toString(),
+		userId,
 	})
 	const request = await setupRequest({ code: githubUser.code })
 	const response = await loader({ request, params: PARAMS, context: {} })
@@ -186,20 +189,16 @@ test('if a user is not logged in, but the connection exists, make a session', as
 test('if a user is not logged in, but the connection exists and they have enabled 2FA, send them to verify their 2FA and do not make a session', async () => {
 	const githubUser = await insertGitHubUser()
 	const { userId } = await setupUser()
-	await prisma.connection.create({
-		data: {
-			providerName: GITHUB_PROVIDER_NAME,
-			providerId: githubUser.profile.id.toString(),
-			userId,
-		},
+	await db.insert(connections).values({
+		providerName: GITHUB_PROVIDER_NAME,
+		providerId: githubUser.profile.id.toString(),
+		userId,
 	})
 	const { otp: _otp, ...config } = generateTOTP()
-	await prisma.verification.create({
-		data: {
-			type: twoFAVerificationType,
-			target: userId,
-			...config,
-		},
+	await db.insert(verifications).values({
+		type: twoFAVerificationType,
+		target: userId,
+		...config,
 	})
 	const request = await setupRequest({ code: githubUser.code })
 	const response = await loader({ request, params: PARAMS, context: {} })
@@ -240,19 +239,28 @@ async function setupRequest({
 }
 
 async function setupUser(userData = createUser()) {
-	const session = await prisma.session.create({
-		data: {
-			expirationDate: getSessionExpirationDate(),
-			user: {
-				create: {
-					...userData,
-				},
-			},
-		},
-		select: {
-			id: true,
-			userId: true,
-		},
+	const session = await db.transaction(async (tx) => {
+		const [user] = await tx
+			.insert(users)
+			.values(userData)
+			.returning({ id: users.id })
+
+		invariant(user, 'user should be defined')
+
+		const [session] = await tx
+			.insert(sessions)
+			.values({
+				expirationDate: getSessionExpirationDate(),
+				userId: user.id,
+			})
+			.returning({
+				id: sessions.id,
+				userId: sessions.userId,
+			})
+
+		invariant(session, 'session must be defined')
+
+		return session
 	})
 
 	return session

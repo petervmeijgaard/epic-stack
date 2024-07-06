@@ -1,6 +1,6 @@
 import { getFormProps, getInputProps, useForm } from '@conform-to/react'
 import { getZodConstraint, parseWithZod } from '@conform-to/zod'
-import { invariantResponse } from '@epic-web/invariant'
+import { invariant, invariantResponse } from '@epic-web/invariant'
 import { type SEOHandle } from '@nasa-gcn/remix-seo'
 import {
 	json,
@@ -16,14 +16,16 @@ import {
 	useLoaderData,
 	useNavigation,
 } from '@remix-run/react'
+import { eq } from 'drizzle-orm'
 import { useState } from 'react'
 import { z } from 'zod'
 import { ErrorList } from '#app/components/forms.tsx'
 import { Button } from '#app/components/ui/button.tsx'
 import { Icon } from '#app/components/ui/icon.tsx'
 import { StatusButton } from '#app/components/ui/status-button.tsx'
+import { db } from '#app/db'
+import { userImages, users } from '#app/db/schema.ts'
 import { requireUserId } from '#app/utils/auth.server.ts'
-import { prisma } from '#app/utils/db.server.ts'
 import {
 	getUserImgSrc,
 	useDoubleCheck,
@@ -60,13 +62,13 @@ const PhotoFormSchema = z.discriminatedUnion('intent', [
 
 export async function loader({ request }: LoaderFunctionArgs) {
 	const userId = await requireUserId(request)
-	const user = await prisma.user.findUnique({
-		where: { id: userId },
-		select: {
+	const user = await db.query.users.findFirst({
+		where: eq(users.id, userId),
+		with: { image: { columns: { id: true } } },
+		columns: {
 			id: true,
 			name: true,
 			username: true,
-			image: { select: { id: true } },
 		},
 	})
 	invariantResponse(user, 'User not found', { status: 404 })
@@ -105,16 +107,15 @@ export async function action({ request }: ActionFunctionArgs) {
 	const { image, intent } = submission.value
 
 	if (intent === 'delete') {
-		await prisma.userImage.deleteMany({ where: { userId } })
+		await db.delete(userImages).where(eq(userImages.userId, userId))
 		return redirect('/settings/profile')
 	}
 
-	await prisma.$transaction(async ($prisma) => {
-		await $prisma.userImage.deleteMany({ where: { userId } })
-		await $prisma.user.update({
-			where: { id: userId },
-			data: { image: { create: image } },
-		})
+	invariant(image, 'Image should be defined')
+
+	await db.transaction(async (trx) => {
+		await trx.delete(userImages).where(eq(userImages.userId, userId))
+		await trx.insert(userImages).values({ userId, ...image })
 	})
 
 	return redirect('/settings/profile')

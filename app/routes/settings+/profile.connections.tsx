@@ -1,4 +1,4 @@
-import { invariantResponse } from '@epic-web/invariant'
+import { invariant, invariantResponse } from '@epic-web/invariant'
 import { type SEOHandle } from '@nasa-gcn/remix-seo'
 import {
 	json,
@@ -8,6 +8,7 @@ import {
 	type HeadersFunction,
 } from '@remix-run/node'
 import { useFetcher, useLoaderData } from '@remix-run/react'
+import { and, count, eq } from 'drizzle-orm'
 import { useState } from 'react'
 import { Icon } from '#app/components/ui/icon.tsx'
 import { StatusButton } from '#app/components/ui/status-button.tsx'
@@ -17,6 +18,8 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from '#app/components/ui/tooltip.tsx'
+import { db } from '#app/db'
+import { connections, passwords, users } from '#app/db/schema.ts'
 import { requireUserId } from '#app/utils/auth.server.ts'
 import { resolveConnectionData } from '#app/utils/connections.server.ts'
 import {
@@ -26,7 +29,6 @@ import {
 	providerIcons,
 	providerNames,
 } from '#app/utils/connections.tsx'
-import { prisma } from '#app/utils/db.server.ts'
 import { makeTimings } from '#app/utils/timing.server.ts'
 import { createToastHeaders } from '#app/utils/toast.server.ts'
 import { type BreadcrumbHandle } from './profile.tsx'
@@ -37,13 +39,18 @@ export const handle: BreadcrumbHandle & SEOHandle = {
 }
 
 async function userCanDeleteConnections(userId: string) {
-	const user = await prisma.user.findUnique({
-		select: {
-			password: { select: { userId: true } },
-			_count: { select: { connections: true } },
-		},
-		where: { id: userId },
-	})
+	const [user] = await db
+		.select({
+			password: { userId: passwords.userId },
+			_count: { connections: count(connections.id) },
+		})
+		.from(users)
+		.leftJoin(connections, eq(users.id, connections.userId))
+		.leftJoin(passwords, eq(users.id, passwords.userId))
+		.where(eq(users.id, userId))
+
+	invariant(user, 'User should exist')
+
 	// user can delete their connections if they have a password
 	if (user?.password) return true
 	// users have to have more than one remaining connection to delete one
@@ -53,11 +60,16 @@ async function userCanDeleteConnections(userId: string) {
 export async function loader({ request }: LoaderFunctionArgs) {
 	const userId = await requireUserId(request)
 	const timings = makeTimings('profile connections loader')
-	const rawConnections = await prisma.connection.findMany({
-		select: { id: true, providerName: true, providerId: true, createdAt: true },
-		where: { userId },
+	const rawConnections = await db.query.connections.findMany({
+		where: eq(connections.userId, userId),
+		columns: {
+			id: true,
+			providerName: true,
+			providerId: true,
+			createdAt: true,
+		},
 	})
-	const connections: Array<{
+	const newConnections: Array<{
 		providerName: ProviderName
 		id: string
 		displayName: string
@@ -73,7 +85,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 			connection.providerId,
 			{ timings },
 		)
-		connections.push({
+		newConnections.push({
 			...connectionData,
 			providerName,
 			id: connection.id,
@@ -83,7 +95,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 	return json(
 		{
-			connections,
+			connections: newConnections,
 			canDeleteConnections: await userCanDeleteConnections(userId),
 		},
 		{ headers: { 'Server-Timing': timings.toString() } },
@@ -110,12 +122,11 @@ export async function action({ request }: ActionFunctionArgs) {
 	)
 	const connectionId = formData.get('connectionId')
 	invariantResponse(typeof connectionId === 'string', 'Invalid connectionId')
-	await prisma.connection.delete({
-		where: {
-			id: connectionId,
-			userId: userId,
-		},
-	})
+	await db
+		.delete(connections)
+		.where(
+			and(eq(connections.id, connectionId), eq(connections.userId, userId)),
+		)
 	const toastHeaders = await createToastHeaders({
 		title: 'Deleted',
 		description: 'Your connection has been deleted.',

@@ -1,22 +1,27 @@
-import { invariantResponse } from '@epic-web/invariant'
+import { invariant, invariantResponse } from '@epic-web/invariant'
 import { json, type LoaderFunctionArgs } from '@remix-run/node'
 import { Link, NavLink, Outlet, useLoaderData } from '@remix-run/react'
+import { eq } from 'drizzle-orm'
 import { GeneralErrorBoundary } from '#app/components/error-boundary.tsx'
 import { Icon } from '#app/components/ui/icon.tsx'
-import { prisma } from '#app/utils/db.server.ts'
+import { db } from '#app/db'
+import { users } from '#app/db/schema.ts'
 import { cn, getUserImgSrc } from '#app/utils/misc.tsx'
 import { useOptionalUser } from '#app/utils/user.ts'
 
 export async function loader({ params }: LoaderFunctionArgs) {
-	const owner = await prisma.user.findFirst({
-		select: {
+	invariant(params.username, 'No username provided')
+	const owner = await db.query.users.findFirst({
+		columns: {
 			id: true,
 			name: true,
 			username: true,
-			image: { select: { id: true } },
-			notes: { select: { id: true, title: true } },
 		},
-		where: { username: params.username },
+		with: {
+			image: { columns: { id: true } },
+			notes: { columns: { id: true, title: true } },
+		},
+		where: eq(users.username, params.username),
 	})
 
 	invariantResponse(owner, 'Owner not found', { status: 404 })

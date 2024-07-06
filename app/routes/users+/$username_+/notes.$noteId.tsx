@@ -1,6 +1,6 @@
 import { getFormProps, useForm } from '@conform-to/react'
 import { parseWithZod } from '@conform-to/zod'
-import { invariantResponse } from '@epic-web/invariant'
+import { invariant, invariantResponse } from '@epic-web/invariant'
 import {
 	json,
 	type LoaderFunctionArgs,
@@ -14,6 +14,7 @@ import {
 	type MetaFunction,
 } from '@remix-run/react'
 import { formatDistanceToNow } from 'date-fns'
+import { eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { GeneralErrorBoundary } from '#app/components/error-boundary.tsx'
 import { floatingToolbarClassName } from '#app/components/floating-toolbar.tsx'
@@ -21,8 +22,9 @@ import { ErrorList } from '#app/components/forms.tsx'
 import { Button } from '#app/components/ui/button.tsx'
 import { Icon } from '#app/components/ui/icon.tsx'
 import { StatusButton } from '#app/components/ui/status-button.tsx'
+import { db } from '#app/db'
+import { notes } from '#app/db/schema.ts'
 import { requireUserId } from '#app/utils/auth.server.ts'
-import { prisma } from '#app/utils/db.server.ts'
 import { getNoteImgSrc, useIsPending } from '#app/utils/misc.tsx'
 import { requireUserWithPermission } from '#app/utils/permissions.server.ts'
 import { redirectWithToast } from '#app/utils/toast.server.ts'
@@ -30,19 +32,20 @@ import { userHasPermission, useOptionalUser } from '#app/utils/user.ts'
 import { type loader as notesLoader } from './notes.tsx'
 
 export async function loader({ params }: LoaderFunctionArgs) {
-	const note = await prisma.note.findUnique({
-		where: { id: params.noteId },
-		select: {
+	invariant(params.noteId, 'No noteId provided')
+
+	const note = await db.query.notes.findFirst({
+		where: eq(notes.id, params.noteId),
+		columns: {
 			id: true,
 			title: true,
 			content: true,
 			ownerId: true,
 			updatedAt: true,
+		},
+		with: {
 			images: {
-				select: {
-					id: true,
-					altText: true,
-				},
+				columns: { id: true, altText: true },
 			},
 		},
 	})
@@ -78,11 +81,13 @@ export async function action({ request }: ActionFunctionArgs) {
 
 	const { noteId } = submission.value
 
-	const note = await prisma.note.findFirst({
-		select: { id: true, ownerId: true, owner: { select: { username: true } } },
-		where: { id: noteId },
+	const note = await db.query.notes.findFirst({
+		columns: { id: true, ownerId: true },
+		where: eq(notes.id, noteId),
+		with: { owner: { columns: { username: true } } },
 	})
-	invariantResponse(note, 'Not found', { status: 404 })
+
+	invariantResponse(note?.owner, 'Not found', { status: 404 })
 
 	const isOwner = note.ownerId === userId
 	await requireUserWithPermission(
@@ -90,7 +95,7 @@ export async function action({ request }: ActionFunctionArgs) {
 		isOwner ? `delete:note:own` : `delete:note:any`,
 	)
 
-	await prisma.note.delete({ where: { id: note.id } })
+	await db.delete(notes).where(eq(notes.id, note.id))
 
 	return redirectWithToast(`/users/${note.owner.username}/notes`, {
 		type: 'success',

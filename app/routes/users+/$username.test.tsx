@@ -1,14 +1,20 @@
 /**
  * @vitest-environment jsdom
  */
+import { invariant } from '@epic-web/invariant'
 import { faker } from '@faker-js/faker'
 import { createRemixStub } from '@remix-run/testing'
 import { render, screen } from '@testing-library/react'
 import setCookieParser from 'set-cookie-parser'
 import { test } from 'vitest'
+import { db } from '#app/db'
+import {
+	users,
+	userImages as userImagesSchema,
+	sessions,
+} from '#app/db/schema.ts'
 import { loader as rootLoader } from '#app/root.tsx'
 import { getSessionExpirationDate, sessionKey } from '#app/utils/auth.server.ts'
-import { prisma } from '#app/utils/db.server.ts'
 import { authSessionStorage } from '#app/utils/session.server.ts'
 import { createUser, getUserImages } from '#tests/db-utils.ts'
 import { default as UsernameRoute, loader } from './$username.tsx'
@@ -17,10 +23,23 @@ test('The user profile when not logged in as self', async () => {
 	const userImages = await getUserImages()
 	const userImage =
 		userImages[faker.number.int({ min: 0, max: userImages.length - 1 })]
-	const user = await prisma.user.create({
-		select: { id: true, username: true, name: true },
-		data: { ...createUser(), image: { create: userImage } },
+
+	invariant(userImage, 'No user image')
+
+	const user = await db.transaction(async (tx) => {
+		const [user] = await tx.insert(users).values(createUser()).returning({
+			id: users.id,
+			username: users.username,
+			name: users.name,
+		})
+
+		invariant(user, 'No user created')
+
+		await tx.insert(userImagesSchema).values({ ...userImage, userId: user.id })
+
+		return user
 	})
+
 	const App = createRemixStub([
 		{
 			path: '/users/:username',
@@ -41,17 +60,32 @@ test('The user profile when logged in as self', async () => {
 	const userImages = await getUserImages()
 	const userImage =
 		userImages[faker.number.int({ min: 0, max: userImages.length - 1 })]
-	const user = await prisma.user.create({
-		select: { id: true, username: true, name: true },
-		data: { ...createUser(), image: { create: userImage } },
+
+	invariant(userImage, 'No user image')
+
+	const user = await db.transaction(async (tx) => {
+		const [user] = await tx.insert(users).values(createUser()).returning({
+			id: users.id,
+			username: users.username,
+			name: users.name,
+		})
+
+		invariant(user, 'No user created')
+
+		await tx.insert(userImagesSchema).values({ ...userImage, userId: user.id })
+
+		return user
 	})
-	const session = await prisma.session.create({
-		select: { id: true },
-		data: {
+
+	const [session] = await db
+		.insert(sessions)
+		.values({
 			expirationDate: getSessionExpirationDate(),
 			userId: user.id,
-		},
-	})
+		})
+		.returning({ id: sessions.id })
+
+	invariant(session, 'No session created')
 
 	const authSession = await authSessionStorage.getSession()
 	authSession.set(sessionKey, session.id)

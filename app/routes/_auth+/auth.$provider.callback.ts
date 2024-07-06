@@ -1,11 +1,14 @@
+import { invariant } from '@epic-web/invariant'
 import { redirect, type LoaderFunctionArgs } from '@remix-run/node'
+import { and, eq } from 'drizzle-orm'
+import { db } from '#app/db'
+import { connections, sessions, users } from '#app/db/schema.ts'
 import {
 	authenticator,
 	getSessionExpirationDate,
 	getUserId,
 } from '#app/utils/auth.server.ts'
 import { ProviderNameSchema, providerLabels } from '#app/utils/connections.tsx'
-import { prisma } from '#app/utils/db.server.ts'
 import { ensurePrimary } from '#app/utils/litefs.server.ts'
 import { combineHeaders } from '#app/utils/misc.tsx'
 import {
@@ -58,11 +61,12 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
 	const { data: profile } = authResult
 
-	const existingConnection = await prisma.connection.findUnique({
-		select: { userId: true },
-		where: {
-			providerName_providerId: { providerName, providerId: profile.id },
-		},
+	const existingConnection = await db.query.connections.findFirst({
+		columns: { userId: true },
+		where: and(
+			eq(connections.providerName, providerName),
+			eq(connections.providerId, profile.id),
+		),
 	})
 
 	const userId = await getUserId(request)
@@ -91,12 +95,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
 	// If we're already logged in, then link the account
 	if (userId) {
-		await prisma.connection.create({
-			data: {
-				providerName,
-				providerId: profile.id,
-				userId,
-			},
+		await db.insert(connections).values({
+			providerName,
+			providerId: profile.id,
+			userId,
 		})
 		return redirectWithToast(
 			'/settings/profile/connections',
@@ -116,17 +118,15 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
 	// if the email matches a user in the db, then link the account and
 	// make a new session
-	const user = await prisma.user.findUnique({
-		select: { id: true },
-		where: { email: profile.email.toLowerCase() },
+	const user = await db.query.users.findFirst({
+		columns: { id: true },
+		where: eq(users.email, profile.email.toLowerCase()),
 	})
 	if (user) {
-		await prisma.connection.create({
-			data: {
-				providerName,
-				providerId: profile.id,
-				userId: user.id,
-			},
+		await db.insert(connections).values({
+			providerName,
+			providerId: profile.id,
+			userId: user.id,
 		})
 		return makeSession(
 			{ request, userId: user.id },
@@ -174,13 +174,20 @@ async function makeSession(
 	responseInit?: ResponseInit,
 ) {
 	redirectTo ??= '/'
-	const session = await prisma.session.create({
-		select: { id: true, expirationDate: true, userId: true },
-		data: {
-			expirationDate: getSessionExpirationDate(),
+	const [session] = await db
+		.insert(sessions)
+		.values({
 			userId,
-		},
-	})
+			expirationDate: getSessionExpirationDate(),
+		})
+		.returning({
+			id: sessions.id,
+			expirationDate: sessions.expirationDate,
+			userId: sessions.userId,
+		})
+
+	invariant(session, 'session must be defined')
+
 	return handleNewSession(
 		{ request, session, redirectTo, remember: true },
 		{ headers: combineHeaders(responseInit?.headers, destroyRedirectTo) },

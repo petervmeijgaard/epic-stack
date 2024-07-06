@@ -1,10 +1,11 @@
 import { json, redirect, type LoaderFunctionArgs } from '@remix-run/node'
 import { Link, useLoaderData } from '@remix-run/react'
+import { sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { GeneralErrorBoundary } from '#app/components/error-boundary.tsx'
 import { ErrorList } from '#app/components/forms.tsx'
 import { SearchBar } from '#app/components/search-bar.tsx'
-import { prisma } from '#app/utils/db.server.ts'
+import { db } from '#app/db'
 import { cn, getUserImgSrc, useDelayedIsPending } from '#app/utils/misc.tsx'
 
 const UserSearchResultSchema = z.object({
@@ -23,7 +24,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 	}
 
 	const like = `%${searchTerm ?? ''}%`
-	const rawUsers = await prisma.$queryRaw`
+
+	const rawUsers = await db.all(sql`
 		SELECT User.id, User.username, User.name, UserImage.id AS imageId
 		FROM User
 		LEFT JOIN UserImage ON User.id = UserImage.userId
@@ -37,7 +39,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 			LIMIT 1
 		) DESC
 		LIMIT 50
-	`
+	`)
 
 	const result = UserSearchResultsSchema.safeParse(rawUsers)
 	if (!result.success) {
